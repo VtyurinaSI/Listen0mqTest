@@ -1,7 +1,7 @@
-﻿
-using System;
+﻿using System;
 using System.Threading;
 using System.Diagnostics;
+using System.IO;
 using NetMQ;
 using NetMQ.Sockets;
 using Newtonsoft.Json;
@@ -22,32 +22,39 @@ namespace IfmConsoleClient
 
         static void Main(string[] args)
         {
-            // Путь к исполняемому файлу сервера (опционально третий аргумент)
-            string serverPath = args.Length > 2 ? args[2] : null;
-            if (!string.IsNullOrEmpty(serverPath))
-            {
-                TryStartServer(serverPath);
-            }
+            // Выбор варианта подключения: true - TCP, false - IPC
+            bool useTcp = true; // установите false для IPC
 
-            // Аргументы для TCP
+            // Определяем путь к ifm3d_camera_middleware.exe
+            string defaultServerDir = @"C:\Users\Булка с мясом\Desktop\детекрирование сосков\MAIN\win64_ifm3d_camera_middleware";
+            string defaultServerExe = Path.Combine(defaultServerDir, "ifm3d_camera_middleware.exe");
+            string serverPath = args.Length > 2 ? args[2] : defaultServerExe;
+
+            // Запускаем сервер
+            TryStartServer(serverPath, useTcp);
+
+            // Адреса для TCP
             string tcpCmdAddress = args.Length > 0 ? args[0] : "tcp://localhost:5555";
             string tcpDataAddress = args.Length > 1 ? args[1] : "tcp://localhost:5556";
 
-            // Аргументы для IPC (если нужны другие адреса, замените здесь)
+            // Адреса для IPC
             string ipcCmdAddress = "ipc:///tmp/ifm-cmd.ipc";
             string ipcDataAddress = "ipc:///tmp/ifm-stream.ipc";
+
+            // Инициализация сокетов по выбранному варианту
             RequestSocket req;
             string streamAddress;
-            //---Выберите вариант подключения: TCP или IPC-- -
-            //Для TCP:
-             req = SetupTcp(tcpCmdAddress);
-             streamAddress = tcpDataAddress;
+            if (useTcp)
+            {
+                req = SetupTcp(tcpCmdAddress);
+                streamAddress = tcpDataAddress;
+            }
+            else
+            {
+                req = SetupIpc(ipcCmdAddress);
+                streamAddress = ipcDataAddress;
+            }
 
-            // Для IPC:
-            // var req = SetupIpc(ipcCmdAddress);
-            // string streamAddress = ipcDataAddress;
-
-            
             using (req)
             {
                 Console.WriteLine("✔ Готов к работе! Введите 'help' для списка команд, 'exit' для выхода.\n");
@@ -148,27 +155,37 @@ namespace IfmConsoleClient
             return sub;
         }
 
-        static void TryStartServer(string path)
+        // Запуск middleware из указанного пути и передачи --mode
+        static void TryStartServer(string exePath, bool useTcp)
         {
+            if (!File.Exists(exePath))
+            {
+                Console.WriteLine($"❌ Middleware не найден по пути: {exePath}");
+                return;
+            }
+            string mode = useTcp ? "tcp" : "ipc";
+            Console.WriteLine($"🚀 Запускаем middleware: {exePath} --mode {mode}...");
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = exePath,
+                Arguments = $"--mode {mode}",
+                WorkingDirectory = Path.GetDirectoryName(exePath),
+                UseShellExecute = true,
+                CreateNoWindow = false
+            };
             try
             {
-                Console.WriteLine($"🚀 Запускаем сервер: {path}...");
-                var startInfo = new ProcessStartInfo
-                {
-                    FileName = path,
-                    UseShellExecute = false,
-                    CreateNoWindow = true
-                };
                 Process.Start(startInfo);
                 Thread.Sleep(1000);
-                Console.WriteLine("✔ Сервер запущен.");
+                Console.WriteLine("✔ Middleware запущен.");
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"❌ Не удалось запустить сервер: {ex.Message}");
+                Console.WriteLine($"❌ Ошибка запуска middleware: {ex.Message}");
             }
         }
 
+        // Обработка стрима: вычисление среднего XYZ
         static void StreamLoop(SubscriberSocket sub, CancellationToken ct)
         {
             while (!ct.IsCancellationRequested)
